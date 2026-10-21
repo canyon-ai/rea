@@ -290,9 +290,15 @@ JavaScript and TypeScript import parsing requires valid UTF-8. Malformed source
 bytes retain their original hashes and sizes with a decoding diagnostic; REA
 does not infer module targets from replacement characters.
 
-Historical-source import requires safe no-follow file opens on Linux or
-macOS. Native Windows returns `unsupported_host`; use Linux REA inside WSL
-or another supported host. See
+Historical-source import uses safe no-follow file opens on Linux/macOS. Windows
+x64 uses the matching verified REA native artifact to pin each regular file and
+its ancestors on fixed local NTFS before borrowing a Node descriptor. Reparse
+components, UNC paths, alternate streams and unsupported filesystems fail closed;
+there is no pathname-only fallback. Node descriptor cleanup precedes native guard
+release, including retained cleanup retries. Directory enumeration still uses
+pathname identity checks and retains the explicit race limitation. If native
+authority is unavailable, use the matching Windows package or Linux REA in WSL.
+See
 [source-to-bundle comparison](javascript-application-workflows.md#historical-source-to-bundle-comparison)
 for mapping identities, inferences and unknowns.
 

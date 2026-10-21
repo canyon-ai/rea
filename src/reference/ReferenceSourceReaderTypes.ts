@@ -86,6 +86,8 @@ export type PendingDirectory = {
 export type TraversalState = {
   readonly resources: ArtifactResourceScope;
   readonly root: string;
+  /** Preserve the selected spelling for native reparse admission, before realpath. */
+  readonly windowsAdmissionRoot?: string;
   readonly rootIdentity: BigIntStats;
   readonly signal?: AbortSignal;
   readonly shouldExclude?: (
@@ -106,6 +108,7 @@ export type StableFileRequest = {
   readonly root: string;
   readonly rootIdentity: BigIntStats;
   readonly absolute: string;
+  readonly windowsAdmissionPath?: string;
   readonly path: string;
   readonly expected: BigIntStats;
   readonly signal?: AbortSignal;

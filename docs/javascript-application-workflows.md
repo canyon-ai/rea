@@ -319,6 +319,15 @@ to the comparison Evidence in a live session.
 
 ## Historical source-to-bundle comparison
 
+On Windows x64, `rea import-reference-source <directory> --json` can import
+regular files on fixed local NTFS with the matching verified native artifact.
+Native read guards reject reparse components and prevent writes/deletes while
+the Node descriptor is borrowed. Missing native authority remains unsupported;
+UNC/reparse/alternate-stream paths are not qualified. Directory enumeration keeps
+its explicit pathname-race limitation. Retain the full historical graph, analyze
+the current application directory/ASAR, then supply both to
+`rea compare-source-to-bundle <request.json> --json` or the MCP operation.
+
 `compare_source_to_bundle` compares one cryptographically committed
 `HistoricalSourceGraph` with authenticated application-graph Evidence. The
 stable scoring model reports every admitted signal and weight: exact source
