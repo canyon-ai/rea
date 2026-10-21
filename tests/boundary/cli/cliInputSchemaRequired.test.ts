@@ -63,11 +63,25 @@ const parserSchema = (
 
 const omissionRejected = (schema: z.ZodObject | undefined): string[] =>
   Object.entries(schema?.shape ?? {})
-    .filter(([, field]) => !field.safeParse(undefined).success)
+    // exactOptional allows absence while rejecting an explicit undefined value.
+    // Parse each field at the object boundary that owns that distinction.
+    .filter(([key, field]) => !z.object({ [key]: field }).safeParse({}).success)
     .map(([key]) => key)
     .sort();
 
 describe("CLI advertised input schemas", () => {
+  it("preserves exact optional omission without accepting explicit undefined", () => {
+    const options = parserSchema(
+      createCli({}),
+      "inspect-wasm-artifact",
+      "options",
+    );
+    expect(options?.safeParse({}).success).toBe(true);
+    expect(options?.safeParse({ commandTimeoutMs: undefined }).success).toBe(
+      false,
+    );
+  });
+
   it("require exactly the inputs whose omission the parser rejects", async () => {
     const cli = createCli({});
     const mismatches: string[] = [];
