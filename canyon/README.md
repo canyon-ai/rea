@@ -1,9 +1,10 @@
 # Canyon static analysis profile
 
 This experimental profile pins REA `rea-agents-6.7.0` at
-`27dc42d10249f0410904a75c0997842eb03b931c`. It exposes six existing REA tools
+`27dc42d10249f0410904a75c0997842eb03b931c` plus Canyon's Windows reader fix. It exposes seven existing REA tools
 through local stdio MCP. It does not execute analyzed targets or expose native
-providers, runtime capture, mutation or source-to-bundle filesystem comparison.
+decompiler providers, runtime capture or mutation. Source-to-bundle comparison is
+now qualified on Windows x64 with the matching native artifact on fixed local NTFS.
 The wrapper is an application-level restriction, not an OS filesystem sandbox.
 
 ## Build and verify
@@ -16,6 +17,7 @@ npm ci --ignore-scripts --no-audit --no-fund
 npm run build:cached
 node canyon/verify-static.mjs ..\rea-trial
 node canyon/verify-mcp.mjs ..\rea-trial
+node canyon/verify-source-bundle.mjs ..\rea-windows-trial
 ```
 
 A source checkout on Windows also needs the matching published Windows native
@@ -37,6 +39,7 @@ The tool catalog is exactly:
 - `trace_javascript_semantics`
 - `compare_application_versions`
 - `compare_javascript_export_shapes`
+- `compare_source_to_bundle`
 
 The analysis input must resolve inside the configured root. Use a narrower root
 for a particular repository. REA's own path resolution and internal reads remain
@@ -60,12 +63,32 @@ and tampered Evidence refusal. Actual stdio MCP passed seven checks including
 catalog restriction, upstream Evidence parsing, usage metadata, outside-root input
 refusal and unavailable runtime-tool refusal.
 
-A broader upstream run returned **97 passed, 52 failed, 3 skipped** across six
-files. All 52 failures were in `sourceToBundlePaths.test.ts`: Windows safe no-follow
-open restrictions and POSIX filename cases. This profile excludes that operation.
-These failures remain unresolved; the complete REA product is not qualified here.
-The five other files passed, covering JS semantics, application workflows,
-export shapes, MCP export shapes and domain source-to-bundle comparison logic.
+A previous upstream run returned **97 passed, 52 failed, 3 skipped** across six
+files. The Windows reader fix resolves the no-follow blocker using existing native
+read guards, retaining the guard until the borrowed Node file descriptor closes.
+Failed close retains one composite cleanup owner; retries preserve close order.
+The path suite now returns **55 passed, 3 pre-existing POSIX-only skips, 0 failed**.
+All Windows-native path cases still use real filesystem import. Four cases with
+NTFS-invalid `?` names use explicitly recorded historical paths and actual ASAR
+bytes; their matching assertions still execute. No additional cases were skipped.
+The expanded regression run passed **165 tests, 3 skipped** across ten files;
+subsequent Windows/CLI coverage includes cancellation during final close.
+
+The real Windows CLI-to-MCP workflow passes historical import, source-map original
+matching, exact-byte matching, retained unknowns, identical CLI/MCP Evidence,
+call usage metadata, tampered Evidence refusal and unchanged target source.
+`compare_source_to_bundle` accepts imported historical graph JSON plus application
+Evidence. Import the graph first with the CLI; the comparison itself reads no
+source paths. See [workflow](../docs/javascript-application-workflows.md#historical-source-to-bundle-comparison).
+
+Qualification is for regular files on fixed local NTFS with verified native x64
+authority. Junction rejection, write/delete exclusion, missing-authority refusal
+and cleanup/cancellation are covered. A broader reader run returned 36 passed,
+7 pre-existing skips and 7 failures during privileged symbolic-link fixture setup
+(`EPERM`). This host cannot create ordinary file/directory symlinks; those seven
+cases remain unqualified, and were not hidden or disabled. Junctions were exercised
+without that privilege. UNC roots, reparse roots, alternate streams, other
+filesystems and full cross-platform regression remain outside this qualification.
 Only the operations exercised by the CLI/MCP trial have end-to-end qualification;
 catalog availability alone is not equivalent verification of every input mode.
 

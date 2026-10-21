@@ -1,4 +1,4 @@
-import { posix } from "node:path";
+import { posix, resolve } from "node:path";
 
 import { compareUnicodeCodePoints } from "../domain/unicodeCodePointOrder.js";
 import { createReferenceSourcePathLookup } from "../domain/referenceSourcePathIdentity.js";
@@ -59,6 +59,9 @@ const readSource = async (
   const state: TraversalState = {
     resources,
     root: canonicalRoot,
+    ...(process.platform === "win32"
+      ? { windowsAdmissionRoot: resolve(root) }
+      : {}),
     rootIdentity,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.shouldExclude === undefined

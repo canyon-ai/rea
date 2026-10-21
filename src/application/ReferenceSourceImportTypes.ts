@@ -26,7 +26,7 @@ const IMPORT_FAILURE_GUIDANCE = {
   unsupported: {
     category: "unsupported_host",
     message:
-      "Safe no-follow file opens are unavailable on this host. Import the source tree with REA on Linux (including WSL) or macOS.",
+      "Safe no-follow file opens are unavailable on this host. On Windows, restore the matching Windows x64 REA native artifact and use a fixed local NTFS volume. Otherwise import with REA on Linux (including WSL) or macOS.",
   },
   io: {
     category: "execution_failure",

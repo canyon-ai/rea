@@ -2,6 +2,7 @@ import { regularFileCancellation } from "../filesystem/OwnedRegularFile.js";
 import type { BigIntStats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
+import { guardWindowsFileRead } from "../windows/WindowsFileReadGuard.js";
 
 import {
   NonRegularFileReadError,
@@ -205,17 +206,44 @@ export const readStableFile = async (
   readonly cleanup?: AnalysisCleanupObservation;
 }> => {
   let owner: OwnedFileHandle | undefined;
+  let guard: { release(): Promise<void> } | undefined;
   let cleanup: AnalysisCleanupObservation | undefined;
   let entry: ReferenceSourceEntry;
   try {
-    entry = await readStableFileEntry(request, (admitted) => {
-      owner = admitted;
-    });
+    entry = await readStableFileEntry(
+      request,
+      (admitted) => {
+        owner = admitted;
+      },
+      (admitted) => {
+        guard = admitted;
+      },
+    );
   } finally {
-    if (owner !== undefined) {
+    const fileOwner = owner,
+      nativeGuard = guard;
+    if (nativeGuard !== undefined) {
+      // One composite owner keeps the native exclusion lease while a failed
+      // borrowed-descriptor close is pending. Retry closes in the same order.
+      const result = await request.resources.release({
+        kind: "lease",
+        resource: request.absolute,
+        lease: {
+          async release() {
+            await fileOwner?.close();
+            await nativeGuard.release();
+          },
+        },
+      });
+      if (result.kind === "failed")
+        cleanup = ArtifactReaderFailure.cleanupObservation(
+          result.cause,
+          request.absolute,
+        );
+    } else if (fileOwner !== undefined) {
       const result = await request.resources.release({
         kind: "file-handle",
-        handle: owner,
+        handle: fileOwner,
         resource: request.absolute,
       });
       if (result.kind === "failed")
@@ -231,9 +259,15 @@ export const readStableFile = async (
 const readStableFileEntry = async (
   request: StableFileRequest,
   retain: (owner: OwnedFileHandle) => void,
+  retainGuard: (lease: { release(): Promise<void> }) => void,
 ): Promise<ReferenceSourceEntry> => {
   const { root, rootIdentity, absolute, path, expected, signal } = request;
   try {
+    if (process.platform === "win32")
+      guardWindowsFileRead(
+        request.windowsAdmissionPath ?? absolute,
+        retainGuard,
+      );
     const parentBefore = await validateDirectory(
       root,
       rootIdentity,
@@ -293,6 +327,17 @@ const readStableFileEntry = async (
         "file",
         "changed",
         "File is no longer a regular file",
+        safeSize(expected.size),
+      );
+    if (
+      cause instanceof Error &&
+      Reflect.get(cause, "code") === "ERR_REA_WINDOWS_NATIVE"
+    )
+      return entryFailure(
+        path,
+        "file",
+        "io",
+        `Windows safe file admission failed: ${cause.message}`,
         safeSize(expected.size),
       );
     const message = filesystemFailureDetail(

@@ -1,6 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import { constants } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
+import { systemWindowsNativeAuthority } from "../windows/WindowsNativeLoader.js";
 
 import { err, ok } from "../domain/result.js";
 import {
@@ -29,7 +30,9 @@ export const isAborted = (signal?: AbortSignal): boolean =>
   signal?.aborted === true;
 
 export const noFollowOpenSupported = (): boolean =>
-  Number.isSafeInteger(constants.O_NOFOLLOW) && constants.O_NOFOLLOW !== 0;
+  process.platform === "win32"
+    ? systemWindowsNativeAuthority().available
+    : Number.isSafeInteger(constants.O_NOFOLLOW) && constants.O_NOFOLLOW !== 0;
 
 export const validateDirectory = async (
   root: string,

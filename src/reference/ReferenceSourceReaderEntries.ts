@@ -282,6 +282,14 @@ const processFileEntry = async (
     root: state.root,
     rootIdentity: state.rootIdentity,
     absolute,
+    ...(state.windowsAdmissionRoot === undefined
+      ? {}
+      : {
+          windowsAdmissionPath: join(
+            state.windowsAdmissionRoot,
+            ...path.split("/"),
+          ),
+        }),
     path,
     expected: metadata,
     ...(state.signal === undefined ? {} : { signal: state.signal }),

@@ -5,14 +5,7 @@ import { describe, expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
-
-const unsupportedHostOutput = {
-  error: "Import failed",
-  category: "unsupported_host",
-  message: expect.stringContaining(
-    "Safe no-follow file opens are unavailable on this host.",
-  ),
-};
+import { createHash } from "node:crypto";
 
 const permissionChecksUnavailable =
   process.platform === "win32" || process.getuid?.() === 0;
@@ -44,22 +37,34 @@ describe("compiled Windows reference-source import", () => {
             ...(scenario.logging ? { REA_LOG_LEVEL: "info" } : {}),
           },
         });
+        const graph = expect.objectContaining({
+          schema: "HistoricalSourceGraph",
+          authority: "historical-reference",
+          entries: expect.arrayContaining([
+            expect.objectContaining({
+              path: "source.js",
+              kind: "file",
+              content_state: "hashed",
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            }),
+          ]),
+        });
         expect(result.json).toEqual(
           scenario.fullOutput
             ? expect.objectContaining({
-                ok: false,
-                error: unsupportedHostOutput,
+                ok: true,
+                data: graph,
               })
-            : unsupportedHostOutput,
+            : graph,
         );
-        expect.soft(result.exitCode).toBe(1);
+        expect.soft(result.exitCode).toBe(0);
         expect(await readFile(source, "utf8")).toBe(bytes);
         if (scenario.logging) {
           expect(JSON.parse(result.stderr.trim())).toMatchObject({
             command: "import-reference-source",
-            status: "error",
-            level: 50,
-            msg: "CLI command failed",
+            status: "ok",
+            level: 30,
+            msg: "CLI command completed",
           });
         } else expect(result.stderr).toBe("");
       },

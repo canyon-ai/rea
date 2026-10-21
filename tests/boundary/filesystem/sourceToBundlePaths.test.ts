@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 
@@ -12,6 +13,12 @@ import {
 } from "../../../src/domain/javascript/javascriptSourceMapPaths.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { importReferenceSource } from "../../support/referenceSourceResourceScope.js";
+import {
+  createHistoricalSourceGraph,
+  type HistoricalSourceGraph,
+} from "../../../src/domain/referenceSourceGraph.js";
+import { asarHeaderBytes } from "../../fixtures/asarHeader.js";
+import { compareUnicodeCodePoints } from "../../../src/domain/unicodeCodePointOrder.js";
 
 it("keeps literal hash characters in historical/current filesystem paths", async () => {
   const root = await createTestTempDirectory("rea-source-path-");
@@ -192,20 +199,13 @@ it.each([
         `/${expected}`,
       );
     }
-    const root = await createTestTempDirectory("rea-nested-map-");
-    const previous = join(root, "previous");
-    const current = join(root, "current");
-    await Promise.all([
-      mkdir(join(previous, expected, ".."), { recursive: true }),
-      mkdir(join(previous, decoyPath, ".."), { recursive: true }),
-      mkdir(join(current, mapPath, ".."), { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(join(previous, expected), "export const value = 1;"),
-      writeFile(join(previous, decoyPath), "export const decoy = 99;"),
-      writeFile(
-        join(current, mapPath),
-        JSON.stringify({
+    const { comparison } = await compareFileFixtures(
+      {
+        [expected]: "export const value = 1;",
+        [decoyPath]: "export const decoy = 99;",
+      },
+      {
+        [mapPath]: JSON.stringify({
           version: 3,
           sources: [source],
           ...(sourceRoot === undefined ? {} : { sourceRoot }),
@@ -213,9 +213,8 @@ it.each([
           names: [],
           mappings: "AAAA",
         }),
-      ),
-    ]);
-    const { comparison } = await compareTrees(previous, current);
+      },
+    );
     const correct = comparison.items.find(
       ({ source_path }) => source_path === expected,
     );
@@ -448,29 +447,22 @@ it.each([
 it.each(["#original.js", "?version.js", "?version.js#original.js"])(
   "uses the relative URL pathname rather than a literal %s filename",
   async (suffix) => {
-    const root = await createTestTempDirectory("rea-source-map-suffix-");
-    const previous = join(root, "previous");
-    const current = join(root, "current");
-    await Promise.all([
-      mkdir(join(previous, "src"), { recursive: true }),
-      mkdir(join(current, "maps"), { recursive: true }),
-    ]);
     const source = `../src/a.js${suffix}`;
-    await Promise.all([
-      writeFile(join(previous, "src/a.js"), "export const value = 1;"),
-      writeFile(join(previous, `src/a.js${suffix}`), "export const decoy = 3;"),
-      writeFile(
-        join(current, "maps/main.js.map"),
-        JSON.stringify({
+    const { comparison, application } = await compareFileFixtures(
+      {
+        "src/a.js": "export const value = 1;",
+        [`src/a.js${suffix}`]: "export const decoy = 3;",
+      },
+      {
+        "maps/main.js.map": JSON.stringify({
           version: 3,
           sources: [source],
           sourcesContent: ["export const value = 2;"],
           names: [],
           mappings: "AAAA",
         }),
-      ),
-    ]);
-    const { comparison, application } = await compareTrees(previous, current);
+      },
+    );
     const actual = comparison.items.find(
       ({ source_path }) => source_path === "src/a.js",
     );
@@ -506,31 +498,24 @@ it.each([
 ])(
   "preserves the literal UNC filesystem name $filename without selecting a URL decoy",
   async ({ filename, decoyFilename }) => {
-    const root = await createTestTempDirectory("rea-source-map-unc-");
-    const previous = join(root, "previous");
-    const current = join(root, "current");
     const source = `\\\\server\\share\\src\\${filename}`;
     const expected = `src/${filename}`;
     const decoy = `src/${decoyFilename}`;
-    await Promise.all([
-      mkdir(join(previous, "src"), { recursive: true }),
-      mkdir(join(current, "maps"), { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(join(previous, expected), "export const value = 1;"),
-      writeFile(join(previous, decoy), "export const decoy = 3;"),
-      writeFile(
-        join(current, "maps/main.map"),
-        JSON.stringify({
+    const { comparison, application } = await compareFileFixtures(
+      {
+        [expected]: "export const value = 1;",
+        [decoy]: "export const decoy = 3;",
+      },
+      {
+        "maps/main.map": JSON.stringify({
           version: 3,
           sources: [source],
           sourcesContent: ["export const value = 2;"],
           names: [],
           mappings: "AAAA",
         }),
-      ),
-    ]);
-    const { comparison, application } = await compareTrees(previous, current);
+      },
+    );
     const actual = comparison.items.find(
       ({ source_path }) => source_path === expected,
     );
@@ -683,12 +668,19 @@ it("rejects static application Evidence whose subject path disagrees with its re
     );
 });
 
-const compareTrees = async (previous: string, current: string) => {
-  const reference = await importReferenceSource({
-    root: previous,
-    caller: "source-to-bundle-path-test",
-    policy: { secretPatterns: [] },
-  });
+const compareTrees = async (
+  previous: string,
+  current: string,
+  recorded?: HistoricalSourceGraph,
+) => {
+  const reference =
+    recorded === undefined
+      ? await importReferenceSource({
+          root: previous,
+          caller: "source-to-bundle-path-test",
+          policy: { secretPatterns: [] },
+        })
+      : { ok: true as const, value: recorded };
   if (!reference.ok) throw new Error(reference.error.message);
   const analyzed = await analyzeJavaScriptApplication({ input_path: current });
   if (!analyzed.ok) throw analyzed.error;
@@ -706,6 +698,99 @@ const compareTrees = async (previous: string, current: string) => {
     },
   });
   return { reference: reference.value, comparison, application };
+};
+
+/** Keep real NTFS imports for native names. Portable names containing '?' are
+ * recorded historical data plus actual ASAR bytes, never fictitious NTFS reads.
+ * No path-matching case is removed or skipped on Windows.
+ */
+const compareFileFixtures = async (
+  previousFiles: Record<string, string>,
+  currentFiles: Record<string, string>,
+) => {
+  const root = await createTestTempDirectory("rea-portable-source-map-");
+  const previous = join(root, "previous"),
+    current = join(root, "current");
+  if (
+    process.platform !== "win32" ||
+    ![...Object.keys(previousFiles), ...Object.keys(currentFiles)].some(
+      (path) => path.includes("?"),
+    )
+  ) {
+    for (const [directory, files] of [
+      [previous, previousFiles],
+      [current, currentFiles],
+    ] as const) {
+      await mkdir(directory);
+      for (const [path, bytes] of Object.entries(files)) {
+        await mkdir(join(directory, path, ".."), { recursive: true });
+        await writeFile(join(directory, path), bytes);
+      }
+    }
+    return compareTrees(previous, current);
+  }
+  const reference = createHistoricalSourceGraph({
+    schema: "HistoricalSourceGraph",
+    authority: "historical-reference",
+    root_alias: "$REFERENCE_ROOT",
+    inventory_state: "partial",
+    entries: Object.entries(previousFiles)
+      .map(([path, bytes]) => ({
+        path,
+        kind: "file" as const,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        size: Buffer.byteLength(bytes),
+        language: "JavaScript",
+        classifications: ["source"] as const,
+        content_state: "hashed" as const,
+        limitations: [],
+      }))
+      .sort((left, right) => compareUnicodeCodePoints(left.path, right.path)),
+    relationships: [],
+    parse_failures: [],
+    exclusions: [],
+    languages: ["JavaScript"],
+    manifests: [],
+    vcs: { kind: "none", head: null, dirty: null },
+    provenance: {
+      importer: "recorded-portable-path-fixture",
+      importer_version: "1",
+      caller: "source-to-bundle-path-test",
+    },
+    limitations: [
+      "Recorded portable paths, not native Windows filesystem import.",
+    ],
+  });
+  type Header = {
+    files: Record<string, Header | { size: number; offset: string }>;
+  };
+  const header: Header = { files: {} },
+    chunks: Buffer[] = [];
+  let offset = 0;
+  for (const [path, text] of Object.entries(currentFiles)) {
+    const components = path.split("/");
+    let directory = header;
+    for (const name of components.slice(0, -1)) {
+      directory.files[name] ??= { files: {} };
+      const child = directory.files[name]!;
+      if (!("files" in child))
+        throw new Error("Fixture path conflicts with a file");
+      directory = child;
+    }
+    const bytes = Buffer.from(text);
+    directory.files[components.at(-1)!] = {
+      size: bytes.length,
+      offset: String(offset),
+    };
+    offset += bytes.length;
+    chunks.push(bytes);
+  }
+  const archive = join(root, "current.asar");
+  await writeFile(
+    archive,
+    Buffer.concat([asarHeaderBytes(JSON.stringify(header)), ...chunks]),
+  );
+  return compareTrees(previous, archive, reference);
 };
 
 it.skipIf(process.platform === "win32")(

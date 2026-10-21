@@ -1,0 +1,78 @@
+name: Canyon Windows source-to-bundle qualification
+
+on:
+  pull_request:
+    branches: [main, canyon/static-analysis-profile]
+    paths:
+      - ".github/workflows/canyon-windows-source-bundle.yml"
+      - "src/reference/**"
+      - "src/windows/WindowsFileReadGuard.ts"
+      - "tests/boundary/filesystem/*Source*"
+      - "tests/boundary/filesystem/sourceToBundlePaths.test.ts"
+      - "canyon/**"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-source-bundle:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Restore integrity-pinned published Windows native artifact
+        shell: pwsh
+        run: |
+          npm pack rea-agents@6.7.0 --ignore-scripts --json --pack-destination "$env:RUNNER_TEMP" > "$env:RUNNER_TEMP/rea-pack.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Native package acquisition failed' }
+          @'
+          import {readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {join} from 'node:path';
+          const expected='sha512-yhIx2ioJYYT1C/tONfYeitC6LhnKmCh+ZwRUOgYuhSc733lGhkkt73zhug9WmLgxoMdKuqIYGCoBfD4fXkOhFw==';
+          const path=join(process.env.RUNNER_TEMP,'rea-agents-6.7.0.tgz');
+          const actual='sha512-'+createHash('sha512').update(readFileSync(path)).digest('base64');
+          if(actual!==expected)throw new Error('Published package integrity mismatch');
+          '@ | node --input-type=module
+          if ($LASTEXITCODE -ne 0) { throw 'Native package integrity failed' }
+          tar -xf "$env:RUNNER_TEMP/rea-agents-6.7.0.tgz" --strip-components=1 package/native/windows/build/manifest.json package/native/windows/build/rea-windows-x64.node
+          if ($LASTEXITCODE -ne 0) { throw 'Native artifact extraction failed' }
+          node scripts/verify-windows-native-artifact.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Native artifact verification failed' }
+      - name: Require actual symlink creation capability
+        shell: pwsh
+        run: |
+          @'
+          import {mkdtemp,writeFile,symlink,lstat} from 'node:fs/promises';
+          import {tmpdir} from 'node:os';
+          import {join} from 'node:path';
+          const root=await mkdtemp(join(tmpdir(),'rea-qualified-symlink-'));
+          await writeFile(join(root,'target'),'inert');
+          await symlink(join(root,'target'),join(root,'link'),'file');
+          if(!(await lstat(join(root,'link'))).isSymbolicLink())throw new Error('Symlink prerequisite not proven');
+          console.log('Real file symlink creation: available');
+          '@ | node --input-type=module
+          if ($LASTEXITCODE -ne 0) { throw 'Symlink qualification prerequisite unavailable; do not mark qualified' }
+      - name: Run native reader and source-to-bundle regressions
+        shell: pwsh
+        run: |
+          npm run test:focused -- tests/boundary/filesystem/windowsReferenceSource.test.ts tests/boundary/filesystem/sourceToBundlePaths.test.ts tests/boundary/filesystem/referenceSourceReader.test.ts tests/boundary/filesystem/referenceSourceImport.test.ts tests/boundary/filesystem/referenceSourceFailureDetails.test.ts tests/boundary/cli/referenceSourceImportStatus.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Windows regression qualification failed' }
+          node canyon/verify-source-bundle.mjs "$env:RUNNER_TEMP/rea-source-bundle"
+          if ($LASTEXITCODE -ne 0) { throw 'CLI/MCP source-to-bundle qualification failed' }
+      - name: Retain qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-source-bundle-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/rea-source-bundle
+          if-no-files-found: warn
